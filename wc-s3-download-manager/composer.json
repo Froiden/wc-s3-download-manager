@@ -1,0 +1,34 @@
+{
+    "name": "froiden/wc-s3-download-manager",
+    "description": "WooCommerce S3 Download Manager — private S3 storage for downloadable products",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=8.2",
+        "aws/aws-sdk-php": "^3.300"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^10.5",
+        "yoast/phpunit-polyfills": "^2.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "WCS3DM\\": "includes/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "WCS3DM\\Tests\\": "tests/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true,
+        "allow-plugins": {
+            "composer/installers": true
+        }
+    },
+    "scripts": {
+        "test": "phpunit"
+    }
+}
