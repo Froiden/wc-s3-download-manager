@@ -66,25 +66,9 @@ final class Connection_Tester {
 			return $this->finish( $tests, $key );
 		}
 
-		// 3. Bucket region.
-		$loc = $this->s3->get_bucket_location();
-		if ( $loc['ok'] ) {
-			$configured = (string) $this->settings->get( 'region' );
-			$actual     = (string) ( $loc['region'] ?? '' );
-			$match      = $this->regions_match( $configured, $actual );
-			$tests[]    = $this->row(
-				'bucket_region',
-				'Bucket region',
-				$match ? self::PASSED : self::FAILED,
-				$match
-					? $loc['message'] . ' (matches configured region).'
-					: sprintf( 'Configured region "%s" does not match bucket region "%s". Update the region setting.', $configured, $actual )
-			);
-		} else {
-			$tests[] = $this->row( 'bucket_region', 'Bucket region', self::FAILED, $loc['message'] );
-		}
+		// Region is taken from settings. GetBucketLocation is not required for uploads or downloads.
 
-		// 4. List permission.
+		// 3. List permission.
 		$list = $this->s3->list_objects( (string) $this->settings->get( 'prefix' ), 1 );
 		$tests[] = $this->row( 'list_objects', 'List objects', $list['ok'] ? self::PASSED : self::FAILED, $list['ok'] ? 'ListObjectsV2 succeeded.' : ( $list['message'] ?? 'Failed' ) );
 
@@ -287,14 +271,4 @@ final class Connection_Tester {
 		);
 	}
 
-	/**
-	 * Compare region strings (us-east-1 vs empty LocationConstraint).
-	 */
-	private function regions_match( string $configured, string $actual ): bool {
-		$normalize = static function ( string $r ): string {
-			$r = strtolower( trim( $r ) );
-			return '' === $r ? 'us-east-1' : $r;
-		};
-		return $normalize( $configured ) === $normalize( $actual );
-	}
 }

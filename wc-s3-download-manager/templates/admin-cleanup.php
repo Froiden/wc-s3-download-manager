@@ -20,7 +20,12 @@ $grace   = (int) \WCS3DM\Plugin::instance()->settings()->get( 'cleanup_grace_day
 	<?php endif; ?>
 	<p><?php esc_html_e( 'Each row is a local WooCommerce download that was copied to S3 and is still on this server. S3 objects are never deleted. Only the selected local files are removed, and only after the checks pass.', 'wc-s3-download-manager' ); ?></p>
 	<?php if ( $grace > 0 ) : ?>
-		<p class="description"><?php echo esc_html( sprintf( /* translators: %d: grace period in days */ __( 'Grace period is %d days. Files stay on disk until that many days have passed since the migration.', 'wc-s3-download-manager' ), $grace ) ); ?></p>
+		<p>
+			<label>
+				<input type="checkbox" id="wcs3dm-cleanup-skip-grace" />
+				<?php echo esc_html( sprintf( /* translators: %d: grace period in days */ __( 'Delete now. Do not wait the %d-day grace period.', 'wc-s3-download-manager' ), $grace ) ); ?>
+			</label>
+		</p>
 	<?php endif; ?>
 	<p>
 		<button type="button" class="button" id="wcs3dm-cleanup-dry"><?php esc_html_e( 'Refresh report', 'wc-s3-download-manager' ); ?></button>

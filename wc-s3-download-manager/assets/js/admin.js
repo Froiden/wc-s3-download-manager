@@ -22,10 +22,30 @@
 		});
 	}
 
-	function renderTests($el, tests) {
-		var html = '<ul class="wcs3dm-test-list">';
-		(tests || []).forEach(function (t) {
-			html += '<li><span class="wcs3dm-status-' + t.status + '">' + escapeHtml(t.status) + '</span> — <strong>' + escapeHtml(t.label) + '</strong>: ' + escapeHtml(t.message) + '</li>';
+	function statusLabel(status) {
+		if (status === 'passed') return 'Passed';
+		if (status === 'failed') return 'Failed';
+		if (status === 'not_tested') return 'Not tested';
+		return status || '';
+	}
+
+	function renderTests($el, tests, summaryHtml) {
+		tests = tests || [];
+		var counts = { passed: 0, failed: 0, not_tested: 0 };
+		tests.forEach(function (t) {
+			if (counts[t.status] != null) counts[t.status] += 1;
+		});
+		var html = summaryHtml || '';
+		html += '<div class="wcs3dm-test-summary">' +
+			'<span class="wcs3dm-status-passed">' + counts.passed + ' passed</span>' +
+			'<span class="wcs3dm-status-failed">' + counts.failed + ' failed</span>' +
+			'<span class="wcs3dm-status-not_tested">' + counts.not_tested + ' not tested</span>' +
+			'</div>';
+		html += '<ul class="wcs3dm-test-list">';
+		tests.forEach(function (t) {
+			html += '<li class="wcs3dm-test-' + escapeHtml(t.status) + '">' +
+				'<span class="wcs3dm-test-badge wcs3dm-status-' + escapeHtml(t.status) + '">' + escapeHtml(statusLabel(t.status)) + '</span>' +
+				'<div><strong>' + escapeHtml(t.label) + '</strong><p>' + escapeHtml(t.message) + '</p></div></li>';
 		});
 		html += '</ul>';
 		$el.html(html);
@@ -55,13 +75,11 @@
 				$out.text((resp.data && resp.data.message) || 'Failed');
 				return;
 			}
-			var html = '<p><strong>' + escapeHtml(resp.data.summary) + '</strong></p>';
+			var html = '';
 			if (resp.data.leftover_key) {
-				html += '<p class="notice notice-warning inline">Leftover object key: <code>' + escapeHtml(resp.data.leftover_key) + '</code></p>';
+				html += '<p class="notice notice-warning inline">A test file is still in the bucket: <code>' + escapeHtml(resp.data.leftover_key) + '</code></p>';
 			}
-			$out.html(html);
-			renderTests($out, resp.data.tests);
-			$out.prepend(html);
+			renderTests($out, resp.data.tests, html);
 		}).fail(function () {
 			$out.text('Request failed');
 		});
@@ -521,19 +539,31 @@
 			if (!resp.success || !resp.data.job) return;
 			var job = resp.data.job;
 			var stats = job.stats || {};
-			var note = (job.status === 'queued' || job.status === 'running')
+			var summary = resp.data.summary || {};
+			var working = job.status === 'queued' || job.status === 'running';
+			var note = working
 				? 'Working. Leave this page open so the next batch can run.'
 				: 'Finished.';
-			$('#wcs3dm-migration-status').html(
-				'<p>Status: <strong>' + escapeHtml(job.status) + '</strong> — ' + escapeHtml(note) + '</p>' +
-				'<p>Processed: ' + (stats.processed || 0) +
-				' | <span class="wcs3dm-status-passed">Success: ' + (stats.success || 0) + '</span>' +
-				' | <span class="wcs3dm-status-failed">Failed: ' + (stats.failed || 0) + '</span>' +
-				' | Skipped: ' + (stats.skipped || 0) + '</p>' +
-				'<p class="description">Local files are not deleted.</p>'
-			);
+			var html = '<p>Status: <strong>' + escapeHtml(job.status) + '</strong> — ' + escapeHtml(note) + '</p>';
+			html += '<p><span class="wcs3dm-status-passed">Uploaded to S3: ' + (summary.success || 0) + '</span>';
+			if (summary.failed) {
+				html += ' | <span class="wcs3dm-status-failed">Failed: ' + summary.failed + '</span>';
+			}
+			html += '</p>';
+			html += '<p>This run — Processed: ' + (stats.processed || 0) +
+				' | New uploads: ' + (stats.success || 0) +
+				' | Failed: ' + (stats.failed || 0) +
+				' | Already on S3: ' + (stats.skipped || 0) + '</p>';
+			if (!working && !(stats.success || 0) && (stats.skipped || 0)) {
+				html += '<p>No new upload was needed. Those files are already on S3.</p>';
+			}
+			html += '<p class="description">Local files are not deleted.</p>';
+			$('#wcs3dm-migration-status').html(html);
 			renderActivity(resp.data.recent || []);
-			if (job.status === 'queued' || job.status === 'running') {
+			if (!working && $('#wcs3dm-discover-results').length) {
+				loadDiscover(1);
+			}
+			if (working) {
 				state.pollTimer = setTimeout(pollJob, 2000);
 			}
 		});
@@ -587,6 +617,18 @@
 			return;
 		}
 
+		if (!data.skip_grace && !(totals.ready_files || 0) && (data.grace_days || 0) > 0) {
+			html += '<div class="notice notice-warning inline"><p>No file can be selected yet. Tick <strong>Delete now</strong> above. The boxes appear on each row after the check finishes. Then click <strong>Delete selected local files</strong>.</p></div>';
+		}
+		if (data.skip_grace && !(totals.ready_files || 0)) {
+			var reasons = [];
+			items.forEach(function (item) {
+				var reason = item.reason || 'Not ready';
+				if (reasons.indexOf(reason) === -1) reasons.push(reason);
+			});
+			html += '<div class="notice notice-error inline"><p>Delete now is on, but these files still cannot be removed. ' + escapeHtml(reasons.join(' ')) + '</p></div>';
+		}
+
 		html += '<p class="description">Selected ready files: <strong id="wcs3dm-cleanup-selected-size">0 B</strong></p>';
 		html += '<table class="widefat striped wcs3dm-cleanup-table"><thead><tr>' +
 			'<th class="check-column"><input type="checkbox" id="wcs3dm-cleanup-all" /></th>' +
@@ -601,7 +643,7 @@
 			html += '<tr class="' + rowClass + '">' +
 				'<td>' + (item.deletable ? '<input type="checkbox" class="wcs3dm-cleanup-pick" data-bytes="' + escapeHtml(item.file_size) + '" value="' + escapeHtml(item.select_path || item.local_path) + '" />' : '') + '</td>' +
 				'<td>' + (products || '—') + '</td>' +
-				'<td><strong>' + escapeHtml(item.filename || '') + '</strong><br><code class="wcs3dm-path">' + escapeHtml(item.local_path || '') + '</code></td>' +
+				'<td><strong>' + escapeHtml(item.filename || '') + '</strong><br><code class="wcs3dm-path">' + escapeHtml(item.local_path || '') + '</code><br><span class="description wcs3dm-cleanup-reason">' + escapeHtml(item.reason || '') + '</span></td>' +
 				'<td><strong>' + escapeHtml(item.s3_filename || '') + '</strong><br><code class="wcs3dm-path">' + escapeHtml(item.object_key || '') + '</code></td>' +
 				'<td>' + escapeHtml(formatBytes(item.file_size)) + '</td>' +
 				'<td><span class="wcs3dm-status-' + statusClass + '">' + escapeHtml(item.outcome || '') + '</span><br><span class="description">' + escapeHtml(item.reason || '') + '</span></td>' +
@@ -609,6 +651,10 @@
 		});
 		html += '</tbody></table>';
 		$('#wcs3dm-cleanup-results').html(html);
+		if (data.skip_grace) {
+			$('.wcs3dm-cleanup-pick').prop('checked', true);
+			$('#wcs3dm-cleanup-all').prop('checked', $('.wcs3dm-cleanup-pick').length > 0);
+		}
 		updateCleanupSelection();
 	}
 
@@ -625,7 +671,7 @@
 	function loadCleanupReport() {
 		if (!$('#wcs3dm-cleanup-results').length) return;
 		$('#wcs3dm-cleanup-results').html('<p class="description">Checking local files…</p>');
-		post('wcs3dm_cleanup', {}).done(function (resp) {
+		post('wcs3dm_cleanup', { skip_grace: $('#wcs3dm-cleanup-skip-grace').prop('checked') ? 1 : 0 }).done(function (resp) {
 			if (!resp.success) {
 				$('#wcs3dm-cleanup-results').html('<p>' + escapeHtml((resp.data && resp.data.message) || 'Could not load the cleanup report.') + '</p>');
 				return;
@@ -640,6 +686,10 @@
 
 	$(document).on('click', '#wcs3dm-cleanup-dry', function (e) {
 		e.preventDefault();
+		loadCleanupReport();
+	});
+
+	$(document).on('change', '#wcs3dm-cleanup-skip-grace', function () {
 		loadCleanupReport();
 	});
 
@@ -664,12 +714,18 @@
 			paths.push($(this).val());
 		});
 		if (!paths.length) {
-			window.alert('Select at least one file that is ready to delete.');
+			var reason = $('.wcs3dm-cleanup-reason').first().text();
+			window.alert(reason || 'Select at least one file that is ready to delete.');
 			return;
 		}
 		if (!window.confirm(wcs3dmAdmin.i18n.confirmCleanup)) return;
 		$('#wcs3dm-cleanup-results').html('<p class="description">Deleting selected local files…</p>');
-		post('wcs3dm_cleanup', { execute: 1, confirm: $('#wcs3dm-cleanup-confirm').val(), paths: paths }).done(function (resp) {
+		post('wcs3dm_cleanup', {
+			execute: 1,
+			confirm: $('#wcs3dm-cleanup-confirm').val(),
+			paths: paths,
+			skip_grace: $('#wcs3dm-cleanup-skip-grace').prop('checked') ? 1 : 0
+		}).done(function (resp) {
 			if (!resp.success) {
 				$('#wcs3dm-cleanup-results').html('<p>' + escapeHtml((resp.data && resp.data.message) || 'Cleanup failed.') + '</p>');
 				return;

@@ -57,7 +57,7 @@ final class Local_Cleanup {
 	 * @param array<int, string> $only_paths Limit an execute pass to these local paths.
 	 * @return array<string, mixed>
 	 */
-	public function review( bool $dry_run, array $only_paths = array() ): array {
+	public function review( bool $dry_run, array $only_paths = array(), bool $skip_grace = false ): array {
 		$groups = $this->grouped_candidates( 500 );
 		$only   = array();
 		foreach ( $only_paths as $path ) {
@@ -90,7 +90,8 @@ final class Local_Cleanup {
 				(int) $row['file_size'],
 				$row['product_ids'],
 				$dry_run,
-				! $dry_run
+				! $dry_run,
+				$skip_grace
 			);
 
 			$result['file_size']   = $local_bytes;
@@ -118,6 +119,7 @@ final class Local_Cleanup {
 			'dry_run'          => $dry_run,
 			'cleanup_enabled'  => $this->is_enabled(),
 			'grace_days'       => (int) $this->settings->get( 'cleanup_grace_days', 7 ),
+			'skip_grace'       => $skip_grace,
 			'items'            => $items,
 			'totals'           => $totals,
 		);
@@ -136,7 +138,8 @@ final class Local_Cleanup {
 		int $file_size,
 		array $product_ids,
 		bool $dry_run = true,
-		bool $write_audit = true
+		bool $write_audit = true,
+		bool $skip_grace = false
 	): array {
 		if ( ! $this->is_enabled() ) {
 			return $this->audit( $product_ids, $local_path, $object_key, $checksum, $file_size, 'skipped', 'Cleanup is disabled in settings.', $dry_run, $write_audit );
@@ -156,7 +159,7 @@ final class Local_Cleanup {
 		// Grace period: check migration log created_at.
 		$grace = (int) $this->settings->get( 'cleanup_grace_days', 7 );
 		$grace_status = $this->grace_status( $object_key, $grace );
-		if ( $grace > 0 && ! $grace_status['elapsed'] ) {
+		if ( ! $skip_grace && $grace > 0 && ! $grace_status['elapsed'] ) {
 			return $this->audit(
 				$product_ids,
 				$local_path,
@@ -175,7 +178,8 @@ final class Local_Cleanup {
 			);
 		}
 
-		$verify = $this->verifier->verify_object( $object_key, $file_size, $checksum ?: null, true );
+		// Head and size only. Re-downloading every object to rehash it blocks the page on large catalogs.
+		$verify = $this->verifier->verify_object( $object_key, $file_size, $checksum ?: null, false );
 		if ( ! $verify['ok'] ) {
 			return $this->audit( $product_ids, $local_path, $object_key, $checksum, $file_size, 'skipped', 'S3 verification failed: ' . $verify['message'], $dry_run, $write_audit );
 		}
@@ -189,8 +193,8 @@ final class Local_Cleanup {
 			}
 		}
 
-		// Media library attachment check.
-		if ( $this->is_attachment_file( $local_path ) ) {
+		// Images and other Media Library files stay on this server. A zip inside the WooCommerce downloads folder is a product file, even when WordPress also has an attachment row for it.
+		if ( ! $this->is_under_download_root( $local_path ) && $this->is_attachment_file( $local_path ) ) {
 			return $this->audit( $product_ids, $local_path, $object_key, $checksum, $file_size, 'skipped', 'File is referenced by the Media Library; refusing delete.', $dry_run, $write_audit );
 		}
 
@@ -318,7 +322,7 @@ final class Local_Cleanup {
 	 * @return array<int, array{product_id:int,download_id:string}>
 	 */
 	private function find_local_dependents( string $local_path ): array {
-		// After migration references should be S3; we still scan recent product IDs from migration log.
+		// A product that already points at S3 is not a local dependent.
 		global $wpdb;
 		$table = $wpdb->prefix . 'wcs3dm_migration_log';
 		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
@@ -337,17 +341,13 @@ final class Local_Cleanup {
 			foreach ( $product->get_downloads() as $did => $download ) {
 				$file = $download->get_file();
 				if ( Reference::is_ours( $file ) ) {
-					$deps[] = array( 'product_id' => (int) $pid, 'download_id' => (string) $did );
 					continue;
 				}
 				$resolved = Path_Validator::resolve_local( $file );
 				if ( $resolved['ok'] && isset( $resolved['path'] ) && $resolved['path'] === $local_path ) {
-					// Still points at local — block cleanup.
-					return array(
-						array(
-							'product_id'  => (int) $pid,
-							'download_id' => (string) $did,
-						),
+					$deps[] = array(
+						'product_id'  => (int) $pid,
+						'download_id' => (string) $did,
 					);
 				}
 			}
@@ -429,6 +429,7 @@ final class Local_Cleanup {
 	public function unreferenced_files(): array {
 		$referenced = $this->referenced_download_paths();
 		$migrated   = $this->migrated_source_paths();
+		$local_names = $this->local_download_basenames();
 		$items      = array();
 		$bytes      = 0;
 		$truncated  = false;
@@ -469,12 +470,21 @@ final class Local_Cleanup {
 
 				$size    = (int) $file->getSize();
 				$kind    = isset( $migrated[ $real ] ) ? 'leftover' : 'orphan';
-				$reason  = 'leftover' === $kind
-					? __( 'No product points at this file anymore. It was left on disk after the product moved to S3.', 'wc-s3-download-manager' )
-					: __( 'No product download in the database uses this file.', 'wc-s3-download-manager' );
-				$blocked = $this->is_attachment_file( $real );
-				if ( $blocked ) {
-					$reason = __( 'The Media Library uses this file, so it will not be deleted.', 'wc-s3-download-manager' );
+				$product = (int) ( $migrated[ $real ]['product_id'] ?? 0 );
+				$still_local = isset( $local_names[ strtolower( $base ) ] );
+				if ( $still_local ) {
+					$reason  = __( 'A product still gives customers this file from the server, so it is not deleted.', 'wc-s3-download-manager' );
+					$blocked = true;
+				} elseif ( 'leftover' === $kind ) {
+					$reason  = sprintf(
+						/* translators: %d: product ID */
+						__( 'Already on S3 for product #%d. Customers download that copy. This server file can be deleted.', 'wc-s3-download-manager' ),
+						$product
+					);
+					$blocked = false;
+				} else {
+					$reason  = __( 'No product downloads this from the server. Customer downloads use S3. This local copy can be deleted.', 'wc-s3-download-manager' );
+					$blocked = false;
 				}
 
 				$items[] = array(
@@ -484,7 +494,7 @@ final class Local_Cleanup {
 					'kind'       => $blocked ? 'media' : $kind,
 					'deletable'  => ! $blocked,
 					'reason'     => $reason,
-					'product_id' => $migrated[ $real ]['product_id'] ?? 0,
+					'product_id' => $product,
 				);
 				if ( ! $blocked ) {
 					$bytes += $size;
@@ -641,6 +651,36 @@ final class Local_Cleanup {
 			}
 		}
 		return $set;
+	}
+
+	/**
+	 * Basenames of product files that are still served from this server.
+	 *
+	 * @return array<string, true>
+	 */
+	private function local_download_basenames(): array {
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows  = $wpdb->get_col( "SELECT meta_value FROM {$wpdb->postmeta} WHERE meta_key = '_downloadable_files'" );
+		$names = array();
+		foreach ( $rows ?: array() as $raw ) {
+			$files = maybe_unserialize( $raw );
+			if ( ! is_array( $files ) ) {
+				continue;
+			}
+			foreach ( $files as $file ) {
+				$url = is_array( $file ) && isset( $file['file'] ) ? (string) $file['file'] : '';
+				if ( '' === $url || Reference::is_ours( $url ) ) {
+					continue;
+				}
+				$path = (string) wp_parse_url( $url, PHP_URL_PATH );
+				$base = strtolower( basename( '' !== $path ? $path : $url ) );
+				if ( '' !== $base ) {
+					$names[ $base ] = true;
+				}
+			}
+		}
+		return $names;
 	}
 
 	/**

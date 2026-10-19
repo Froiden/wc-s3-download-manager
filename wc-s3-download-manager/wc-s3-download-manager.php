@@ -3,7 +3,7 @@
  * Plugin Name:       WooCommerce S3 Download Manager
  * Plugin URI:        https://github.com/froiden/wc-s3-download-manager
  * Description:       Store and deliver WooCommerce downloadable products from private Amazon S3 buckets using temporary signed URLs.
- * Version:           1.0.9
+ * Version:           1.0.16
  * Requires at least: 6.4
  * Requires PHP:      8.2
  * Author:            Froiden
@@ -24,7 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-define( 'WCS3DM_VERSION', '1.0.9' );
+define( 'WCS3DM_VERSION', '1.0.16' );
 define( 'WCS3DM_FILE', __FILE__ );
 define( 'WCS3DM_PATH', plugin_dir_path( __FILE__ ) );
 define( 'WCS3DM_URL', plugin_dir_url( __FILE__ ) );

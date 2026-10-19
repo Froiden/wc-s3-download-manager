@@ -36,6 +36,7 @@ final class Admin {
 	 * Register hooks.
 	 */
 	public function hooks(): void {
+		add_filter( 'plugin_action_links_' . WCS3DM_BASENAME, array( $this, 'plugin_action_links' ) );
 		add_action( 'admin_menu', array( $this, 'menu' ), 60 );
 		add_action( 'admin_enqueue_scripts', array( $this, 'assets' ) );
 		add_action( 'admin_init', array( $this, 'handle_post' ) );
@@ -67,6 +68,22 @@ final class Admin {
 				}
 			);
 		}
+	}
+
+	/**
+	 * Settings link on the Plugins screen.
+	 *
+	 * @param array<int, string> $links Existing links.
+	 * @return array<int, string>
+	 */
+	public function plugin_action_links( array $links ): array {
+		if ( ! current_user_can( 'manage_woocommerce' ) ) {
+			return $links;
+		}
+		$url      = admin_url( 'admin.php?page=wcs3dm&tab=settings' );
+		$settings = '<a href="' . esc_url( $url ) . '">' . esc_html__( 'Settings', 'wc-s3-download-manager' ) . '</a>';
+		array_unshift( $links, $settings );
+		return $links;
 	}
 
 	/**
@@ -328,16 +345,19 @@ final class Admin {
 			}
 		}
 
-		$recent = ( new Bulk_Migrator( $this->settings, $this->logger ) )->recent_rows( 40 );
+		$migrator = new Bulk_Migrator( $this->settings, $this->logger );
+		$recent   = $migrator->recent_rows( 40 );
+		$summary  = $migrator->log_summary();
 		if ( '' !== $job_id ) {
 			wp_send_json_success(
 				array(
-					'job'    => $jobs->get_job( $job_id ),
-					'recent' => $recent,
+					'job'     => $jobs->get_job( $job_id ),
+					'recent'  => $recent,
+					'summary' => $summary,
 				)
 			);
 		}
-		wp_send_json_success( array( 'jobs' => $jobs->list_jobs(), 'job' => null, 'recent' => $recent ) );
+		wp_send_json_success( array( 'jobs' => $jobs->list_jobs(), 'job' => null, 'recent' => $recent, 'summary' => $summary ) );
 	}
 
 	/**
@@ -365,9 +385,10 @@ final class Admin {
 		if ( ! $dry && ! $paths ) {
 			wp_send_json_error( array( 'message' => 'Select at least one file that is ready to delete.' ) );
 		}
+		$skip_grace = ! empty( $_POST['skip_grace'] );
 
 		$cleanup = new Local_Cleanup( $this->settings, $this->logger );
-		wp_send_json_success( $cleanup->review( $dry, $paths ) );
+		wp_send_json_success( $cleanup->review( $dry, $paths, $skip_grace ) );
 	}
 
 	/**

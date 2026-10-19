@@ -27,7 +27,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 </div>
 <div class="wcs3dm-card" style="margin-top:16px;">
 	<h2><?php esc_html_e( 'Files no product uses', 'wc-s3-download-manager' ); ?></h2>
-	<p><?php esc_html_e( 'These files are in the WooCommerce downloads folder on this server, but no product download points at them. That includes files left behind after a product was moved to S3. Media Library files are not listed. S3 objects are not deleted.', 'wc-s3-download-manager' ); ?></p>
+	<p><?php esc_html_e( 'These files are in the WooCommerce downloads folder on this server, but no product download points at them. Deleting one removes that server copy only. Customer downloads from S3 stay.', 'wc-s3-download-manager' ); ?></p>
 	<p>
 		<button type="button" class="button" id="wcs3dm-orphans-refresh"><?php esc_html_e( 'Refresh', 'wc-s3-download-manager' ); ?></button>
 		<button type="button" class="button" id="wcs3dm-orphans-select"><?php esc_html_e( 'Select all', 'wc-s3-download-manager' ); ?></button>

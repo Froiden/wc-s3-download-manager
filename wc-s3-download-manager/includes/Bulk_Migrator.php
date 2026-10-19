@@ -239,6 +239,30 @@ final class Bulk_Migrator {
 	}
 
 	/**
+	 * Counts from the migration log, ignoring dry runs.
+	 *
+	 * @return array{success:int,failed:int,skipped:int}
+	 */
+	public function log_summary(): array {
+		global $wpdb;
+		$table = $wpdb->prefix . 'wcs3dm_migration_log';
+		// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+		$rows = $wpdb->get_results( "SELECT status, COUNT(*) AS total FROM {$table} WHERE dry_run = 0 GROUP BY status", ARRAY_A );
+		$out  = array(
+			'success' => 0,
+			'failed'  => 0,
+			'skipped' => 0,
+		);
+		foreach ( $rows ?: array() as $row ) {
+			$status = (string) $row['status'];
+			if ( isset( $out[ $status ] ) ) {
+				$out[ $status ] = (int) $row['total'];
+			}
+		}
+		return $out;
+	}
+
+	/**
 	 * Latest migration rows for the activity table.
 	 *
 	 * @return array<int, array<string, mixed>>
@@ -331,10 +355,17 @@ final class Bulk_Migrator {
 					continue;
 				}
 				if ( Reference::is_ours( $download->get_file() ) ) {
+					++$processed;
+					++$skipped;
+					$messages[] = sprintf( '#%d/%s: Already on S3.', $product_id, $download_id );
 					continue;
 				}
 				$resolved = Path_Validator::resolve_local( $download->get_file() );
 				if ( ! $resolved['ok'] ) {
+					++$processed;
+					++$failed;
+					$messages[] = sprintf( '#%d/%s: %s', $product_id, $download_id, $resolved['message'] );
+					$this->record( $product_id, (string) $download_id, $download->get_file(), '', 0, '', 'failed', $resolved['message'], $dry_run );
 					continue;
 				}
 
